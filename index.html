@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Network Visualization</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            overflow: hidden;
+            background: #0f1729;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        #title {
+            color: white;
+            text-align: center;
+            padding: 10px;
+            font-size: 24px;
+            font-weight: 600;
+            margin: 0;
+            text-shadow: 0 0 10px rgba(120, 170, 255, 0.6);
+        }
+        
+        #visualization {
+            flex-grow: 1;
+            position: relative;
+        }
+        
+        svg {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .node {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .node:hover {
+            filter: brightness(1.2);
+        }
+        
+        .link {
+            stroke-opacity: 0.6;
+        }
+        
+        .node-label {
+            font-size: 11px;
+            font-weight: 500;
+            text-anchor: middle;
+            dominant-baseline: middle;
+            pointer-events: none;
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+        }
+        
+        .controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 10;
+        }
+        
+        button {
+            background: rgba(255, 255, 255, 0.15);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+        
+        button:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+        
+        .tooltip {
+            position: absolute;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            border-radius: 5px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 12px;
+            max-width: 200px;
+        }
+        
+        .stat-value {
+            font-weight: bold;
+            color: #5eead4;
+        }
+        
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% {
+                transform: scale(1.1);
+                opacity: 0.7;
+            }
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1 id="title">Interactive Network Visualization</h1>
+    <div id="visualization">
+        <div class="controls">
+            <button id="toggle-gravity">Toggle Gravity</button>
+            <button id="toggle-links">Toggle Links</button>
+            <button id="force-repulse">Force Repulse</button>
+        </div>
+        <div class="tooltip"></div>
+    </div>
+
+    <script>
+        // Set up the visualization
+        const width = window.innerWidth;
+        const height = window.innerHeight - 50;
+        const colors = d3.scaleOrdinal(d3.schemeTableau10);
+        
+        // Create SVG container
+        const svg = d3.select("#visualization")
+            .append("svg")
+            .attr("width", width)
+            .attr("height", height);
+        
+        // Add a gradient definition
+        const defs = svg.append("defs");
+        
+        // Create a radial gradient
+        const gradient = defs.append("radialGradient")
+            .attr("id", "node-gradient")
+            .attr("cx", "50%")
+            .attr("cy", "50%")
+            .attr("r", "50%");
+        
+        gradient.append("stop")
+            .attr("offset", "0%")
+            .attr("stop-color", "rgba(255, 255, 255, 0.8)");
+        
+        gradient.append("stop")
+            .attr("offset", "100%")
+            .attr("stop-color", "rgba(255, 255, 255, 0.2)");
+        
+        // Add a subtle glow filter
+        const filter = defs.append("filter")
+            .attr("id", "glow")
+            .attr("x", "-50%")
+            .attr("y", "-50%")
+            .attr("width", "200%")
+            .attr("height", "200%");
+        
+        filter.append("feGaussianBlur")
+            .attr("stdDeviation", "2.5")
+            .attr("result", "coloredBlur");
+        
+        const feMerge = filter.append("feMerge");
+        feMerge.append("feMergeNode")
+            .attr("in", "coloredBlur");
+        feMerge.append("feMergeNode")
+            .attr("in", "SourceGraphic");
+        
+        // Generate initial nodes and links
+        const generateGraph = (nodeCount = 30) => {
+            const nodes = [];
+            const links = [];
+            const groups = ["A", "B", "C", "D"];
+            
+            // Create nodes
+            for (let i = 0; i < nodeCount; i++) {
+                const group = groups[Math.floor(Math.random() * groups.length)];
+                const size = Math.random() * 0.6 + 0.4;  // Size between 0.4 and 1
+                
+                nodes.push({
+                    id: i,
+                    group,
+                    size,
+                    value: Math.floor(Math.random() * 100),
+                    radius: 5 + (size * 15),
+                    name: `Node ${i}`,
+                    connections: 0
+                });
+            }
+            
+            // Create links (ensuring each node has at least one connection)
+            nodes.forEach((node, i) => {
+                // Ensure at least one connection
+                const targetIndex = (i + 1) % nodes.length;
+                links.push({
+                    source: i,
+                    target: targetIndex,
+                    value: Math.random()
+                });
+                nodes[i].connections++;
+                nodes[targetIndex].connections++;
+                
+                // Add random additional connections
+                const connectionCount = Math.floor(Math.random() * 3);
+                for (let j = 0; j < connectionCount; j++) {
+                    const target = Math.floor(Math.random() * nodes.length);
+                    if (target !== i) {
+                        links.push({
+                            source: i,
+                            target,
+                            value: Math.random()
+                        });
+                        nodes[i].connections++;
+                        nodes[target].connections++;
+                    }
+                }
+            });
+            
+            return { nodes, links };
+        };
+        
+        let graph = generateGraph();
+        
+        // Create force simulation
+        const simulation = d3.forceSimulation(graph.nodes)
+            .force("link", d3.forceLink(graph.links).id(d => d.id).distance(d => 100 - d.value * 50))
+            .force("charge", d3.forceManyBody().strength(-100))
+            .force("center", d3.forceCenter(width / 2, height / 2))
+            .force("collide", d3.forceCollide().radius(d => d.radius + 2).iterations(2));
+        
+        // Create links
+        const link = svg.append("g")
+            .attr("class", "links")
+            .selectAll("line")
+            .data(graph.links)
+            .enter()
+            .append("line")
+            .attr("class", "link")
+            .style("stroke", d => d3.interpolateBlues(d.value))
+            .style("stroke-width", d => 1 + d.value * 3);
+        
+        // Create node groups
+        const node = svg.append("g")
+            .attr("class", "nodes")
+            .selectAll(".node")
+            .data(graph.nodes)
+            .enter()
+            .append("g")
+            .attr("class", "node")
+            .call(d3.drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended));
+        
+        // Add circles to nodes
+        node.append("circle")
+            .attr("r", d => d.radius)
+            .style("fill", d => colors(d.group))
+            .style("filter", "url(#glow)")
+            .style("stroke", d => d3.color(colors(d.group)).darker())
+            .style("stroke-width", 1.5)
+            .style("stroke-opacity", 0.8)
+            .on("mouseover", showTooltip)
+            .on("mouseout", hideTooltip)
+            .on("click", highlightConnections);
+        
+        // Add ripple effect circles
+        node.append("circle")
+            .attr("r", d => d.radius * 1.8)
+            .style("fill", "none")
+            .style("stroke", d => colors(d.group))
+            .style("stroke-width", 0.5)
+            .style("stroke-opacity", 0.5)
+            .style("opacity", 0)
+            .attr("class", "ripple");
+        
+        // Add labels to nodes
+        node.append("text")
+            .attr("class", "node-label")
+            .text(d => d.group)
+            .attr("fill", "white")
+            .attr("font-size", d => Math.max(8, d.radius / 2 + 6));
+        
+        // Set up tooltip
+        const tooltip = d3.select(".tooltip");
+        
+        // Define tick function for simulation
+        simulation.on("tick", () => {
+            link
+                .attr("x1", d => d.source.x)
+                .attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x)
+                .attr("y2", d => d.target.y);
+            
+            node.attr("transform", d => `translate(${d.x},${d.y})`);
+        });
+        
+        // Drag functions
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+            d3.select(this).select("circle").transition().duration(200).attr("r", d => d.radius * 1.2);
+        }
+        
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+        
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+            d3.select(this).select("circle").transition().duration(500).attr("r", d => d.radius);
+            resetHighlights();
+        }
+        
+        // Tooltip functions
+        function showTooltip(event, d) {
+            tooltip.style("opacity", 1)
+                .html(`
+                    <div>
+                        <strong>${d.name}</strong><br/>
+                        Group: <span class="stat-value">${d.group}</span><br/>
+                        Value: <span class="stat-value">${d.value}</span><br/>
+                        Connections: <span class="stat-value">${d.connections}</span>
+                    </div>
+                `)
+                .style("left", (event.pageX + 15) + "px")
+                .style("top", (event.pageY - 30) + "px");
+            
+            d3.select(this)
+                .transition()
+                .duration(300)
+                .attr("r", d.radius * 1.2);
+        }
+        
+        function hideTooltip() {
+            tooltip.style("opacity", 0);
+            d3.select(this)
+                .transition()
+                .duration(300)
+                .attr("r", d => d.radius);
+        }
+        
+        // Highlight connections function
+        function highlightConnections(event, d) {
+            // Reset previous highlights
+            resetHighlights();
+            
+            // Find connected nodes
+            const connectedNodes = new Set();
+            connectedNodes.add(d.id);
+            
+            graph.links.forEach(link => {
+                if (link.source.id === d.id) {
+                    connectedNodes.add(link.target.id);
+                } else if (link.target.id === d.id) {
+                    connectedNodes.add(link.source.id);
+                }
+            });
+            
+            // Highlight connected nodes and links
+            node.selectAll("circle")
+                .style("opacity", node => connectedNodes.has(node.id) ? 1 : 0.2);
+            
+            link.style("opacity", link => 
+                connectedNodes.has(link.source.id) && connectedNodes.has(link.target.id) ? 1 : 0.1);
+            
+            // Add ripple effect to connected nodes
+            node.filter(n => connectedNodes.has(n.id) && n.id !== d.id)
+                .select(".ripple")
+                .style("opacity", 1)
+                .classed("pulse", true);
+            
+            setTimeout(resetHighlights, 5000);
+        }
+        
+        function resetHighlights() {
+            node.selectAll("circle").style("opacity", 1);
+            link.style("opacity", 0.6);
+            node.select(".ripple")
+                .style("opacity", 0)
+                .classed("pulse", false);
+        }
+        
+        // Add event listeners for buttons
+        document.getElementById("toggle-gravity").addEventListener("click", toggleGravity);
+        document.getElementById("toggle-links").addEventListener("click", toggleLinks);
+        document.getElementById("force-repulse").addEventListener("click", forceRepulse);
+        
+        let gravityOn = true;
+        let linksVisible = true;
+        
+        function addNode() {
+            const lastId = graph.nodes.length;
+            const group = ["A", "B", "C", "D"][Math.floor(Math.random() * 4)];
+            const size = Math.random() * 0.6 + 0.4;
+            
+            // Create new node
+            const newNode = {
+                id: lastId,
+                group,
+                size,
+                value: Math.floor(Math.random() * 100),
+                radius: 5 + (size * 15),
+                name: `Node ${lastId}`,
+                connections: 0,
+                x: width / 2,
+                y: height / 2
+            };
+            
+            // Add connections to random existing nodes
+            const connectionCount = Math.floor(Math.random() * 3) + 1;
+            for (let i = 0; i < connectionCount; i++) {
+                const targetId = Math.floor(Math.random() * graph.nodes.length);
+                graph.links.push({
+                    source: lastId,
+                    target: targetId,
+                    value: Math.random()
+                });
+                newNode.connections++;
+                graph.nodes[targetId].connections++;
+            }
+            
+            // Add node to graph
+            graph.nodes.push(newNode);
+            
+            // Update the visualization
+            updateVisualization();
+            
+            // Highlight the new node temporarily
+            setTimeout(() => {
+                node.filter(d => d.id === lastId)
+                    .select("circle")
+                    .transition()
+                    .duration(500)
+                    .style("fill", d => colors(d.group))
+                    .attr("r", d => d.radius);
+            }, 1000);
+            
+            // Apply a burst animation to the new node
+            node.filter(d => d.id === lastId)
+                .select("circle")
+                .attr("r", 0)
+                .style("fill", "white")
+                .transition()
+                .duration(1000)
+                .attr("r", d => d.radius)
+                .style("fill", d => colors(d.group));
+        }
+        
+        function toggleGravity() {
+            gravityOn = !gravityOn;
+            
+            if (gravityOn) {
+                simulation.force("center", d3.forceCenter(width / 2, height / 2));
+                simulation.force("charge", d3.forceManyBody().strength(-100));
+            } else {
+                simulation.force("center", null);
+                simulation.force("charge", d3.forceManyBody().strength(-20));
+            }
+            
+            simulation.alpha(0.3).restart();
+        }
+        
+        function toggleLinks() {
+            linksVisible = !linksVisible;
+            link.transition()
+                .duration(500)
+                .style("opacity", linksVisible ? 0.6 : 0);
+        }
+        
+        function forceRepulse() {
+            // Apply a temporary strong repulsive force
+            const originalCharge = simulation.force("charge");
+            simulation.force("charge", d3.forceManyBody().strength(-500));
+            simulation.alpha(0.5).restart();
+            
+            // Create a ripple effect from the center
+            svg.append("circle")
+                .attr("cx", width / 2)
+                .attr("cy", height / 2)
+                .attr("r", 10)
+                .style("fill", "none")
+                .style("stroke", "white")
+                .style("stroke-width", 2)
+                .style("stroke-opacity", 0.7)
+                .transition()
+                .duration(1500)
+                .attr("r", Math.min(width, height) / 2)
+                .style("stroke-opacity", 0)
+                .remove();
+            
+            // Reset after animation
+            setTimeout(() => {
+                simulation.force("charge", originalCharge);
+                simulation.alpha(0.1).restart();
+            }, 1500);
+        }
+        
+        // Update the visualization with new data
+        function updateVisualization() {
+            // Update the simulation
+            simulation.nodes(graph.nodes);
+            simulation.force("link").links(graph.links);
+            simulation.alpha(0.3).restart();
+            
+            // Update links
+            link = link.data(graph.links, d => `${d.source.id}-${d.target.id}`);
+            link.exit().remove();
+            
+            const linkEnter = link.enter()
+                .append("line")
+                .attr("class", "link")
+                .style("stroke", d => d3.interpolateBlues(d.value))
+                .style("stroke-width", d => 1 + d.value * 3)
+                .style("opacity", 0);
+            
+            linkEnter.transition()
+                .duration(500)
+                .style("opacity", 0.6);
+            
+            link = linkEnter.merge(link);
+            
+            // Update nodes
+            node = node.data(graph.nodes, d => d.id);
+            node.exit().remove();
+            
+            const nodeEnter = node.enter()
+                .append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.x},${d.y})`)
+                .call(d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended));
+            
+            nodeEnter.append("circle")
+                .attr("r", d => d.radius)
+                .style("fill", d => colors(d.group))
+                .style("filter", "url(#glow)")
+                .style("stroke", d => d3.color(colors(d.group)).darker())
+                .style("stroke-width", 1.5)
+                .style("stroke-opacity", 0.8)
+                .on("mouseover", showTooltip)
+                .on("mouseout", hideTooltip)
+                .on("click", highlightConnections);
+            
+            nodeEnter.append("circle")
+                .attr("r", d => d.radius * 1.8)
+                .style("fill", "none")
+                .style("stroke", d => colors(d.group))
+                .style("stroke-width", 0.5)
+                .style("stroke-opacity", 0.5)
+                .style("opacity", 0)
+                .attr("class", "ripple");
+            
+            nodeEnter.append("text")
+                .attr("class", "node-label")
+                .text(d => d.group)
+                .attr("fill", "white")
+                .attr("font-size", d => Math.max(8, d.radius / 2 + 6));
+            
+            node = nodeEnter.merge(node);
+        }
+        
+        // Handle window resize
+        window.addEventListener("resize", () => {
+            const width = window.innerWidth;
+            const height = window.innerHeight - 50;
+            
+            svg.attr("width", width)
+                .attr("height", height);
+            
+            simulation.force("center", d3.forceCenter(width / 2, height / 2))
+                .alpha(0.3)
+                .restart();
+        });
+    </script>
+</body>
+</html>
